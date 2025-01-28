@@ -14,103 +14,13 @@ from smolagents import (
     VisitWebpageTool,
 )
 
-
-
-
 from smolagents import tool 
 # import packages that are used in our tools
 import requests
 from bs4 import BeautifulSoup
 import json
+import gh_draft, hf_draft
 
-@tool
-def get_hugging_face_top_daily_paper() -> str:
-    """
-    This is a tool that returns the most upvoted paper on Hugging Face daily papers.
-    It returns the title of the paper
-    """
-    try:
-      url = "https://huggingface.co/papers"
-      response = requests.get(url)
-      response.raise_for_status()  # Raise an exception for bad status codes (4xx or 5xx)
-      soup = BeautifulSoup(response.content, "html.parser")
-
-      # Extract the title element from the JSON-like data in the "data-props" attribute
-      containers = soup.find_all('div', class_='SVELTE_HYDRATER contents')
-      top_paper = ""
-
-      for container in containers:
-          data_props = container.get('data-props', '')
-          if data_props:
-              try:
-                  # Parse the JSON-like string
-                  json_data = json.loads(data_props.replace('&quot;', '"'))
-                  if 'dailyPapers' in json_data:
-                      top_paper = json_data['dailyPapers'][0]['title']
-              except json.JSONDecodeError:
-                  continue
-
-      return top_paper
-    except requests.exceptions.RequestException as e:
-      print(f"Error occurred while fetching the HTML: {e}")
-      return None
-
-from huggingface_hub import HfApi
-
-@tool
-def get_paper_id_by_title(title: str) -> str:
-    """
-    This is a tool that returns the arxiv paper id by its title.
-    It returns the title of the paper
-
-    Args:
-        title: The paper title for which to get the id.
-    """
-    api = HfApi()
-    papers = api.list_papers(query=title)
-    if papers:
-        paper = next(iter(papers))
-        return paper.id
-    else:
-        return None
-    
-import arxiv
-
-@tool
-def download_paper_by_id(paper_id: str) -> None:
-    """
-    This tool gets the id of a paper and downloads it from arxiv. It saves the paper locally 
-    in the current directory as "paper.pdf".
-
-    Args:
-        paper_id: The id of the paper to download.
-    """
-    paper = next(arxiv.Client().results(arxiv.Search(id_list=[paper_id])))
-    paper.download_pdf(filename="paper.pdf")
-    return None
-
-
-from pypdf import PdfReader
-
-@tool
-def read_pdf_file(file_path: str) -> str:
-    """
-    This function reads the first three pages of a PDF file and returns its content as a string.
-    Args:
-        file_path: The path to the PDF file.
-    Returns:
-        A string containing the content of the PDF file.
-    """
-    content = ""
-    reader = PdfReader('paper.pdf')
-    print(len(reader.pages))
-    pages = reader.pages[:3]
-    for page in pages:
-        content += page.extract_text()
-    return content  
-
-
-# Let's setup the instrumentation first
 
 trace_provider = TracerProvider()
 trace_provider = register(
@@ -129,33 +39,76 @@ model = LiteLLMModel(
     api_key="your-api-key",  # replace with API key if necessary
 )
 
+
+@tool
+def final_answer(answer: str) -> None:
+    """
+    Presents final answer on your task to manager
+    Args:
+        answer: string with all nessesary information on task
+    """
+    print(answer)
+    return None
+
+
+add_imports = ['bs4', 'requests', 'json']
+
 agent = CodeAgent(
     # tools=[
         # DuckDuckGoSearchTool(), 
         # VisitWebpageTool()
         # ],
-    tools=[get_hugging_face_top_daily_paper,
-                         get_paper_id_by_title,
-                         download_paper_by_id,
-                         read_pdf_file],
+    tools=[hf_draft.get_hugging_face_top_daily_paper,
+                         hf_draft.get_paper_id_by_title,
+                         hf_draft.download_paper_by_id,
+                         hf_draft.read_pdf_file,
+                         final_answer],
     model=model,
-    additional_authorized_imports=['bs4', 'requests']
+    additional_authorized_imports=add_imports
 )
-managed_agent = ManagedAgent(
+managed_hf_agent = ManagedAgent(
     agent=agent,
-    name="managed_agent",
+    name="managed_hf_agent",
     description="This is an agent that can parse hf papers",
 )
+
+agent = CodeAgent(
+    # tools=[
+        # DuckDuckGoSearchTool(), 
+        # VisitWebpageTool()
+        # ],
+    tools=[
+        gh_draft.get_repo_info,
+        gh_draft.get_file_content,
+        gh_draft.get_repo_structure,
+        final_answer
+           ],
+    model=model,
+    additional_authorized_imports=add_imports
+)
+managed_gh_agent = ManagedAgent(
+    agent=agent,
+    name="managed_gh_agent",
+    description="This is an agent that gets info about github repositories",
+)
+
+
 manager_agent = CodeAgent(
     # tools=[DuckDuckGoSearchTool(), VisitWebpageTool()],
     tools=[],
     model=model,
-    managed_agents=[managed_agent],
+    managed_agents=[managed_hf_agent, managed_gh_agent],
 )
 
 manager_agent.run(
     # "If the US keeps it 2024 growth rate, how many years would it take for the GDP to double?"
-    "Summarize today's top paper on Hugging Face daily papers by reading it.",
+    # "Summarize today's top paper on Hugging Face daily papers by reading it.",
+    # "Get general info and structure of hummingbot/hummingbot repo"
+    # "Make deep investigation of github repo missglory/agent-drafters with your team. Compose detailed explanation of overall architecture of this project."
+    # "Make deep analysis of github repo missglory/agent-drafters with your team. Use your gh agent in order to gather all actual info. Make sure that"
+    # "You are investigating github project missglory/agent-drafters with your team. Make step by step analysis. First, get actual directory structure, then based on that information read all existing file contents and create summary for each file"
+    # "Get structure of repo missglory/agent-drafters with your team. What file might be most interesting?"
+    "Get structure info on github repo missglory/agent-drafters with your team. Once done, read contents of next most interesting file on your opinion, compose summary after reading it"
 )
 
 
